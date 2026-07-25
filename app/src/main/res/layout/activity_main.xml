@@ -19,7 +19,7 @@
         android:id="@+id/search_box"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="Search..."
+        android:hint="Search for content..."
         android:textColor="#FFFFFF"
         android:textColorHint="#AAAAAA"
         android:background="#111111"
