@@ -1,18 +1,22 @@
 package com.litestream.app;
 
+import android.app.Activity;
 import android.os.Bundle;
-import android.os.Handler;
-import android.view.KeyEvent;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.ListView;
+import android.widget.TextView;
 import android.widget.Toast;
 import android.webkit.WebView;
 import android.webkit.WebSettings;
-import androidx.appcompat.app.AppCompatActivity;
+import android.webkit.WebViewClient;
+
 import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URL;
 import javax.net.ssl.HttpsURLConnection;
@@ -20,9 +24,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
-import java.io.InputStream;
 
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends Activity {
 
     private ListView contentList;
     private EditText searchBox;
@@ -33,7 +36,6 @@ public class MainActivity extends AppCompatActivity {
 
     // ---------------------------------------------------------
     // STEP 5: PASTE YOUR GIST RAW URL BELOW THIS LINE
-    // Replace the text inside the quotes with your actual Gist Raw URL
     private static final String CONTENT_URL = "https://gist.githubusercontent.com/pvpthekingof-dot/21ceaed39d1db8b654b2a431924add01/raw/40bafc9181b402a0462e00dac678f094f3edf270/content.json";
     // ---------------------------------------------------------
 
@@ -42,52 +44,78 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // Initialize Views
         contentList = findViewById(R.id.content_list);
         searchBox = findViewById(R.id.search_box);
         videoPlayer = findViewById(R.id.video_player);
 
-        // Setup List Adapter
-        adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, filteredContent);
+        // Custom adapter forces white text so rows are visible on black background
+        adapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, filteredContent) {
+            @Override
+            public View getView(int position, View convertView, android.view.ViewGroup parent) {
+                View view = super.getView(position, convertView, parent);
+                TextView text = view.findViewById(android.R.id.text1);
+                text.setTextColor(0xFFFFFFFF);
+                text.setBackgroundColor(0xFF000000);
+                text.setPadding(16, 24, 16, 24);
+                return view;
+            }
+        };
         contentList.setAdapter(adapter);
 
-        // Setup Search (Simple version that updates on every keystroke)
-        searchBox.addTextChangedListener(new android.text.TextWatcher() {
-            public void afterTextChanged(android.text.TextEditable s) {}
+        searchBox.addTextChangedListener(new TextWatcher() {
+            @Override
             public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+
+            @Override
             public void onTextChanged(CharSequence s, int start, int before, int count) {
                 filterList(s.toString());
             }
+
+            @Override
+            public void afterTextChanged(Editable s) {}
         });
 
-        // Setup Item Click (Play Video)
         contentList.setOnItemClickListener(new AdapterView.OnItemClickListener() {
             @Override
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
                 String selectedItem = filteredContent.get(position);
                 String[] parts = selectedItem.split("\\|");
                 if (parts.length > 1) {
-                    // Hide list, show player
-                    contentList.setVisibility(View.GONE);
-                    searchBox.setVisibility(View.GONE);
-                    videoPlayer.setVisibility(View.VISIBLE);
-
-                    // Load Video
-                    WebSettings webSettings = videoPlayer.getSettings();
-                    webSettings.setJavaScriptEnabled(true);
-                    webSettings.setAllowFileAccess(false);
-                    videoPlayer.loadUrl(parts[1]);
+                    playVideo(parts[1]);
                 }
             }
         });
 
-        // Check if URL is still the placeholder
-        if (CONTENT_URL.contains("PASTE_YOUR_GIST_RAW_URL_HERE") || CONTENT_URL.isEmpty()) {
-             Toast.makeText(this, "ERROR: You must update the CONTENT_URL in the code!", Toast.LENGTH_LONG).show();
+        if (CONTENT_URL.isEmpty() || CONTENT_URL.contains("PASTE_YOUR_GIST_RAW_URL_HERE")) {
+            Toast.makeText(this, "ERROR: You must update the CONTENT_URL in the code!", Toast.LENGTH_LONG).show();
         } else {
-            // Fetch Content from Remote Source
             fetchRemoteContent();
         }
+    }
+
+    private void playVideo(String videoUrl) {
+        contentList.setVisibility(View.GONE);
+        searchBox.setVisibility(View.GONE);
+        videoPlayer.setVisibility(View.VISIBLE);
+
+        WebSettings webSettings = videoPlayer.getSettings();
+        webSettings.setJavaScriptEnabled(true);
+        webSettings.setAllowFileAccess(false);
+        webSettings.setMediaPlaybackRequiresUserGesture(false); // let video autoplay
+
+        videoPlayer.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+                Toast.makeText(MainActivity.this, "Playback error: invalid or unreachable link", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        // Wrap the raw video URL in a minimal HTML5 <video> tag — WebView.loadUrl()
+        // on a raw .mp4 often fails to play inline, this is the reliable way.
+        String html = "<html><body style='margin:0;padding:0;background:#000;'>"
+                + "<video width='100%' height='100%' controls autoplay playsinline src='"
+                + videoUrl + "'></video></body></html>";
+        videoPlayer.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
     }
 
     private void fetchRemoteContent() {
@@ -106,7 +134,6 @@ public class MainActivity extends AppCompatActivity {
                 reader.close();
                 connection.disconnect();
 
-                // Parse JSON
                 JSONArray jsonArray = new JSONArray(result.toString());
                 allContent.clear();
 
@@ -117,7 +144,6 @@ public class MainActivity extends AppCompatActivity {
                     allContent.add(title + "|" + videoUrl);
                 }
 
-                // Update UI
                 runOnUiThread(() -> {
                     filteredContent.clear();
                     filteredContent.addAll(allContent);
@@ -149,10 +175,10 @@ public class MainActivity extends AppCompatActivity {
     @Override
     public void onBackPressed() {
         if (videoPlayer.getVisibility() == View.VISIBLE) {
+            videoPlayer.loadUrl("about:blank");
             videoPlayer.setVisibility(View.GONE);
             contentList.setVisibility(View.VISIBLE);
             searchBox.setVisibility(View.VISIBLE);
-            videoPlayer.loadUrl("about:blank");
         } else {
             super.onBackPressed();
         }
