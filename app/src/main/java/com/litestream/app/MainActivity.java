@@ -1,177 +1,150 @@
 package com.litestream.app;
 
-import android.app.Activity;
-import android.net.Uri;
 import android.os.Bundle;
-import android.text.Editable;
-import android.text.TextWatcher;
+import android.os.Handler;
 import android.view.View;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.ListView;
-import android.widget.MediaController;
 import android.widget.Toast;
-import android.widget.VideoView;
-
+import android.webkit.WebView;
+import android.webkit.WebSettings;
+import androidx.appcompat.app.AppCompatActivity;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.URL;
+import javax.net.ssl.HttpsURLConnection;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.List;
 
-/**
- * LiteStream MVP
- * -----------------------------------------------------------------------
- * Single-activity, text-only streaming list built for 1GB RAM Android TV
- * boxes. No image loading libs, no ads/analytics, no heavy animations.
- *
- * Data model: LinkedHashMap<Title, Url> loaded from SAMPLE_DATA below.
- * To scale later, replace loadSampleData() with a method that fetches
- * and parses a remote JSON array of {"title":"...","url":"..."} objects
- * (e.g. using HttpURLConnection + org.json, both already in the Android
- * SDK — no extra libraries needed).
- */
-public class MainActivity extends Activity {
+public class MainActivity extends AppCompatActivity {
 
-    // ---- Full catalog: title -> direct video URL -------------------------
-    // Add more entries here, or load them from a remote JSON file later.
-    private static final String[][] SAMPLE_DATA = {
-            {"Big Buck Bunny", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"},
-            {"Elephants Dream", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4"},
-            {"Sintel", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4"},
-            {"For Bigger Blazes", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"},
-            {"For Bigger Escapes", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4"}
-    };
-
-    // Preserves insertion order, title -> url
-    private final LinkedHashMap<String, String> fullCatalog = new LinkedHashMap<>();
-
+    private ListView contentList;
     private EditText searchBox;
-    private ListView listView;
-    private VideoView videoView;
-    private View headerGroup; // title + search + list, hidden during playback
-
+    private WebView videoPlayer;
+    private List<String> allContent = new ArrayList<>();
+    private List<String> filteredContent = new ArrayList<>;
     private ArrayAdapter<String> adapter;
-    private ArrayList<String> visibleTitles;
 
-    private MediaController mediaController;
+    // THIS IS WHERE YOU PUT YOUR GIST URL
+    private static final String CONTENT_URL = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_GIST_ID/raw/content.json";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        headerGroup = findViewById(R.id.header_group);
+        // Initialize Views
+        contentList = findViewById(R.id.content_list);
         searchBox = findViewById(R.id.search_box);
-        listView = findViewById(R.id.content_list);
-        videoView = findViewById(R.id.video_player);
+        videoPlayer = findViewById(R.id.video_player);
 
-        loadSampleData();
+        // Setup List Adapter
+        adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, filteredContent);
+        contentList.setAdapter(adapter);
 
-        visibleTitles = new ArrayList<>(fullCatalog.keySet());
-        // Custom lightweight row (list_item.xml) is a plain white-on-black TextView,
-        // so no thumbnails/images and no per-row color hacks are needed at runtime.
-        adapter = new ArrayAdapter<>(this, R.layout.list_item, android.R.id.text1, visibleTitles);
-        listView.setAdapter(adapter);
-
-        listView.setOnItemClickListener((parent, view, position, id) -> {
-            String title = visibleTitles.get(position);
-            String url = fullCatalog.get(title);
-            playVideo(title, url);
-        });
-
-        searchBox.addTextChangedListener(new TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
-
-            @Override
-            public void onTextChanged(CharSequence s, int start, int before, int count) {
-                filterList(s.toString());
+        // Setup Search
+        searchBox.setOnKeyListener((v, keyCode, event) -> {
+            if (keyCode == KeyEvent.KEYCODE_ENTER) {
+                filterList(searchBox.getText().toString());
+                return true;
             }
+            return false;
+        });
 
+        // Setup Item Click (Play Video)
+        contentList.setOnItemClickListener(new AdapterView.OnItemClickListener() {
             @Override
-            public void afterTextChanged(Editable s) { }
+            public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+                String selectedItem = filteredContent.get(position);
+                String[] parts = selectedItem.split("\\|");
+                if (parts.length > 1) {
+                    // Hide list, show player
+                    contentList.setVisibility(View.GONE);
+                    searchBox.setVisibility(View.GONE);
+                    videoPlayer.setVisibility(View.VISIBLE);
+
+                    // Load Video
+                    WebSettings webSettings = videoPlayer.getSettings();
+                    webSettings.setJavaScriptEnabled(true);
+                    webSettings.setAllowFileAccess(false);
+                    videoPlayer.loadUrl(parts[1]);
+                }
+            }
         });
 
-        mediaController = new MediaController(this);
-        mediaController.setAnchorView(videoView);
-        videoView.setMediaController(mediaController);
-
-        videoView.setOnErrorListener((mp, what, extra) -> {
-            Toast.makeText(MainActivity.this, "Playback error: invalid or unreachable link", Toast.LENGTH_SHORT).show();
-            showList();
-            return true; // error handled, don't let system show its own dialog
-        });
-
-        videoView.setOnCompletionListener(mp -> showList());
+        // Fetch Content from Remote Source
+        fetchRemoteContent();
     }
 
-    /** Step 1: populate the in-memory catalog from the hardcoded sample data. */
-    private void loadSampleData() {
-        fullCatalog.clear();
-        for (String[] entry : SAMPLE_DATA) {
-            fullCatalog.put(entry[0], entry[1]);
-        }
+    private void fetchRemoteContent() {
+        new Thread(() -> {
+            try {
+                URL url = new URL(CONTENT_URL);
+                HttpsURLConnection connection = (HttpsURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                InputStream inputStream = connection.getInputStream();
+                BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+                StringBuilder result = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    result.append(line);
+                }
+                reader.close();
+                connection.disconnect();
+
+                // Parse JSON
+                JSONArray jsonArray = new JSONArray(result.toString());
+                allContent.clear();
+
+                for (int i = 0; i < jsonArray.length(); i++) {
+                    JSONObject item = jsonArray.getJSONObject(i);
+                    String title = item.getString("title");
+                    String videoUrl = item.getString("url");
+                    allContent.add(title + "|" + videoUrl);
+                }
+
+                // Update UI
+                runOnUiThread(() -> {
+                    filteredContent.clear();
+                    filteredContent.addAll(allContent);
+                    adapter.notifyDataSetChanged();
+                    Toast.makeText(MainActivity.this, "Content Loaded: " + allContent.size() + " items", Toast.LENGTH_SHORT).show();
+                });
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Failed to load content. Check URL.", Toast.LENGTH_LONG).show());
+            }
+        }).start();
     }
 
-    /** Step 2: real-time filter — rebuilds the visible list from the query. */
     private void filterList(String query) {
-        visibleTitles.clear();
-        String q = query.trim().toLowerCase();
-        for (String title : fullCatalog.keySet()) {
-            if (q.isEmpty() || title.toLowerCase().contains(q)) {
-                visibleTitles.add(title);
+        filteredContent.clear();
+        if (query.isEmpty()) {
+            filteredContent.addAll(allContent);
+        } else {
+            for (String item : allContent) {
+                if (item.toLowerCase().contains(query.toLowerCase())) {
+                    filteredContent.add(item);
+                }
             }
         }
         adapter.notifyDataSetChanged();
     }
 
-    /** Step 3: hide list/search, show player, and start playback. */
-    private void playVideo(String title, String url) {
-        if (url == null || url.trim().isEmpty()) {
-            Toast.makeText(this, "No link available for " + title, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        try {
-            headerGroup.setVisibility(View.GONE);
-            videoView.setVisibility(View.VISIBLE);
-            videoView.setVideoURI(Uri.parse(url));
-            videoView.requestFocus();
-            videoView.start();
-        } catch (Exception e) {
-            Toast.makeText(this, "Unable to play: " + title, Toast.LENGTH_SHORT).show();
-            showList();
-        }
-    }
-
-    /** Step 4: return to the browsing list, stopping any active playback. */
-    private void showList() {
-        if (videoView.isPlaying()) {
-            videoView.stopPlayback();
-        }
-        videoView.setVisibility(View.GONE);
-        headerGroup.setVisibility(View.VISIBLE);
-    }
-
     @Override
     public void onBackPressed() {
-        if (videoView.getVisibility() == View.VISIBLE) {
-            showList();
+        if (videoPlayer.getVisibility() == View.VISIBLE) {
+            videoPlayer.setVisibility(View.GONE);
+            contentList.setVisibility(View.VISIBLE);
+            searchBox.setVisibility(View.VISIBLE);
+            videoPlayer.loadUrl("about:blank");
         } else {
             super.onBackPressed();
-        }
-    }
-
-    @Override
-    protected void onPause() {
-        super.onPause();
-        if (videoView.isPlaying()) {
-            videoView.pause();
-        }
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        if (videoView != null) {
-            videoView.stopPlayback();
         }
     }
 }
